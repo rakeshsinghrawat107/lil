@@ -5,25 +5,22 @@ from contextlib import contextmanager
 from pathlib import Path
 from backend.app.config import Config
 
-_IS_POSTGRES = False
-_PG_DRIVER = None
+def is_postgres():
+    url = os.environ.get("DATABASE_URL") or Config.DATABASE_URL
+    return url.startswith("postgres://") or url.startswith("postgresql://")
 
-db_url = Config.DATABASE_URL
-
-if db_url.startswith("postgres://") or db_url.startswith("postgresql://"):
-    _IS_POSTGRES = True
+def _get_pg_driver():
     try:
         import psycopg
-        _PG_DRIVER = "psycopg"
+        return "psycopg"
     except Exception:
-        try:
-            import pg8000.dbapi
-            _PG_DRIVER = "pg8000"
-        except Exception:
-            _PG_DRIVER = None
-
-def is_postgres():
-    return _IS_POSTGRES
+        pass
+    try:
+        import pg8000.dbapi
+        return "pg8000"
+    except Exception:
+        pass
+    return None
 
 class DatabaseWrapper:
     def __init__(self, raw_conn, is_pg=False):
@@ -43,18 +40,20 @@ class DatabaseWrapper:
         self.raw_conn.close()
 
 def get_connection():
-    if _IS_POSTGRES:
-        if _PG_DRIVER == "psycopg":
+    if is_postgres():
+        db_url = os.environ.get("DATABASE_URL") or Config.DATABASE_URL
+        driver = _get_pg_driver()
+        if driver == "psycopg":
             import psycopg
-            conn = psycopg.connect(Config.DATABASE_URL, autocommit=False)
+            conn = psycopg.connect(db_url, autocommit=False)
             return DatabaseWrapper(conn, is_pg=True)
-        elif _PG_DRIVER == "pg8000":
+        elif driver == "pg8000":
             import pg8000.dbapi
             import ssl
             from urllib.parse import urlparse, unquote
-            parsed = urlparse(Config.DATABASE_URL)
+            parsed = urlparse(db_url)
             if not parsed.hostname:
-                raise RuntimeError(f"Unable to parse PostgreSQL URL: {Config.DATABASE_URL}")
+                raise RuntimeError(f"Unable to parse PostgreSQL URL: {db_url}")
             user = unquote(parsed.username) if parsed.username else None
             password = unquote(parsed.password) if parsed.password else None
             host = parsed.hostname
@@ -62,7 +61,7 @@ def get_connection():
             dbname = parsed.path.lstrip("/").split("?")[0] if parsed.path else "postgres"
             # Support SSL for cloud providers like Supabase / Neon / AWS RDS
             ssl_ctx = None
-            if "sslmode=disable" not in Config.DATABASE_URL.lower():
+            if "sslmode=disable" not in db_url.lower():
                 ssl_ctx = ssl.create_default_context()
             conn = pg8000.dbapi.connect(
                 user=user,
@@ -77,7 +76,8 @@ def get_connection():
             raise RuntimeError("PostgreSQL URL requested but neither psycopg nor pg8000 could be loaded.")
     else:
         # SQLite
-        path_str = Config.DATABASE_URL.replace("sqlite:///", "")
+        db_url = os.environ.get("DATABASE_URL") or Config.DATABASE_URL
+        path_str = db_url.replace("sqlite:///", "")
         path = Path(path_str)
         path.parent.mkdir(parents=True, exist_ok=True)
         conn = sqlite3.connect(str(path), timeout=30.0)
@@ -187,7 +187,6 @@ def run_migrations():
         if not existing_column:
             conn.cursor().execute("ALTER TABLE volunteer_profiles ADD COLUMN interviewed_by TEXT")
 
-
 def _upgrade_sqlite_user_roles(conn):
     """Rebuild legacy SQLite users tables to allow the core_committee role."""
     schema = fetch_one(conn, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'")
@@ -217,6 +216,7 @@ def _upgrade_sqlite_user_roles(conn):
             SELECT id, email, password_hash, role, status, created_at, updated_at, last_login_at
             FROM users_legacy
         """)
+        raw_conn.drop_table_legacy = "DROP TABLE users_legacy"
         raw_conn.execute("DROP TABLE users_legacy")
         raw_conn.commit()
     except Exception:

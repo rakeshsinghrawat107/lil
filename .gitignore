@@ -45,3 +45,6 @@ dist-ssr/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Agents
+.agents/
