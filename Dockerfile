@@ -31,4 +31,4 @@ USER 10001:10001
 
 EXPOSE 5000
 
-CMD ["sh", "-c", "python -m backend.app.db.migrate && python -m backend.app.db.seed && exec gunicorn --bind 0.0.0.0:5000 --workers 2 --threads 4 --timeout 120 backend.run:app"]
+CMD ["sh", "-c", "python -m backend.app.db.migrate && python -m backend.app.db.seed && exec gunicorn --bind 0.0.0.0:${PORT:-5000} --workers 2 --threads 4 --timeout 120 backend.run:app"]
