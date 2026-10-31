@@ -39,6 +39,12 @@ class DatabaseWrapper:
     def close(self):
         self.raw_conn.close()
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
 def get_connection():
     if is_postgres():
         db_url = os.environ.get("DATABASE_URL") or Config.DATABASE_URL
@@ -63,6 +69,11 @@ def get_connection():
             ssl_ctx = None
             if "sslmode=disable" not in db_url.lower():
                 ssl_ctx = ssl.create_default_context()
+                # On Windows, Supabase pooler certificate chain requires disabling hostname check
+                # unless a custom root CA is installed, matching standard libpq sslmode=require behavior
+                if "sslmode=verify-full" not in db_url.lower():
+                    ssl_ctx.check_hostname = False
+                    ssl_ctx.verify_mode = ssl.CERT_NONE
             conn = pg8000.dbapi.connect(
                 user=user,
                 password=password,

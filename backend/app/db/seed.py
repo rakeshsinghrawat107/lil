@@ -69,15 +69,16 @@ def seed_database():
         raise ValueError("BOOTSTRAP_CONVENER_PASSWORD must contain at least 12 characters.")
 
     print("Seeding database...")
+
+    # 1. Seed Organizers & Convener in a short transaction
+    org_ids = {}
     with transaction() as conn:
-        # Seed known demo logins only when demo data is enabled.
         organizers = []
         if seed_demo_data:
             organizers.extend([
                 ("convener@tapmi.edu.in", "Convener Lead", "convener", "convener123"),
                 ("coconvener@tapmi.edu.in", "Co-Convener Deputy", "co_convener", "coconvener123"),
             ])
-        org_ids = {}
         for email, full_name, role, pwd in organizers:
             existing = fetch_one(conn, "SELECT id FROM users WHERE email = %s", (email,))
             if not existing:
@@ -91,8 +92,6 @@ def seed_database():
             else:
                 org_ids[role] = existing['id']
 
-        # Production deployments can bootstrap one organizer without installing
-        # the predictable demo accounts or the sample volunteer/event records.
         if bootstrap_email:
             existing = fetch_one(conn, "SELECT id, role FROM users WHERE email = %s", (bootstrap_email,))
             if existing:
@@ -107,10 +106,12 @@ def seed_database():
                 row = fetch_one(conn, "SELECT id FROM users WHERE email = %s", (bootstrap_email,))
                 org_ids.setdefault("convener", row["id"])
 
-        convener_id = org_ids.get("convener")
+    convener_id = org_ids.get("convener")
 
-        # 2. Seed Departments
-        dept_ids = {}
+    # 2. Seed Departments & Skills
+    dept_ids = {}
+    skill_ids = {}
+    with transaction() as conn:
         for d in DEPARTMENTS:
             existing = fetch_one(conn, "SELECT id FROM departments WHERE name = %s", (d["name"],))
             if not existing:
@@ -123,8 +124,6 @@ def seed_database():
             else:
                 dept_ids[d["name"]] = existing['id']
 
-        # 3. Seed Skills
-        skill_ids = {}
         for sname in STANDARD_SKILLS:
             existing = fetch_one(conn, "SELECT id FROM skills WHERE name = %s", (sname,))
             if not existing:
@@ -137,39 +136,47 @@ def seed_database():
             else:
                 skill_ids[sname] = existing['id']
 
-        # 4. Seed Volunteers from CSV if available
-        csv_path = BASE_DIR / "volunteers CSV.csv"
-        volunteers_seeded = 0
-        if seed_demo_data and csv_path.exists():
-            with open(csv_path, "r", encoding="utf-8-sig") as f:
-                reader = csv.DictReader(f)
-                for row in reader:
+    print("Departments and standard skills verified.")
+
+    # 3. Seed Volunteers from CSV in small chunks
+    csv_path = BASE_DIR / "volunteers CSV.csv"
+    volunteers_seeded = 0
+    if seed_demo_data and csv_path.exists():
+        with open(csv_path, "r", encoding="utf-8-sig") as f:
+            reader = csv.DictReader(f)
+            rows = list(reader)
+
+        demo_pwd_hash = generate_password_hash("volunteer123")
+        chunk_size = 15
+
+        for i in range(0, len(rows), chunk_size):
+            chunk = rows[i:i + chunk_size]
+            with transaction() as conn:
+                existing_vols = {r['student_id']: r['id'] for r in fetch_all(conn, "SELECT student_id, id FROM volunteer_profiles")}
+                existing_user_emails = {r['email']: r['id'] for r in fetch_all(conn, "SELECT email, id FROM users")}
+                existing_skills = {(r['volunteer_id'], r['skill_id']) for r in fetch_all(conn, "SELECT volunteer_id, skill_id FROM volunteer_skills")}
+                existing_prefs = {(r['volunteer_id'], r['department_name']) for r in fetch_all(conn, "SELECT volunteer_id, department_name FROM volunteer_preferences")}
+
+                for row in chunk:
                     v_id = row["volunteer_id"].strip()
                     name = row["name"].strip()
                     interviewed_by = row.get("interviewed_by", "").strip()
                     email = normalize_name_to_email(name, v_id)
-                    max_hours = float(row.get("max_hours") or 8.0)
-                    avail_start = row.get("availability_start") or "09:00"
-                    avail_end = row.get("availability_end") or "21:00"
 
-                    # Check profile
-                    prof = fetch_one(conn, "SELECT id FROM volunteer_profiles WHERE student_id = %s", (v_id,))
-                    if not prof:
-                        # For the first volunteer (V001), create an active user login so user can log in immediately
+                    prof_id = existing_vols.get(v_id)
+                    if not prof_id:
                         user_id = None
                         if v_id in ("V001", "V002"):
-                            # Seed pre-activated account for demo
-                            u_existing = fetch_one(conn, "SELECT id FROM users WHERE email = %s", (email,))
-                            if not u_existing:
-                                pwd_hash = generate_password_hash("volunteer123")
+                            if email not in existing_user_emails:
                                 execute_query(conn, """
                                     INSERT INTO users (email, password_hash, role, status, created_at, updated_at)
                                     VALUES (%s, %s, 'volunteer', 'active', %s, %s)
-                                """, (email, pwd_hash, ts, ts))
+                                """, (email, demo_pwd_hash, ts, ts))
                                 u_row = fetch_one(conn, "SELECT id FROM users WHERE email = %s", (email,))
                                 user_id = u_row['id']
+                                existing_user_emails[email] = user_id
                             else:
-                                user_id = u_existing['id']
+                                user_id = existing_user_emails[email]
 
                         execute_query(conn, """
                             INSERT INTO volunteer_profiles (user_id, student_id, full_name, interviewed_by, email, active_status, created_by, created_at, updated_at)
@@ -177,47 +184,41 @@ def seed_database():
                         """, (user_id, v_id, name, interviewed_by, email, convener_id, ts, ts))
                         prof_row = fetch_one(conn, "SELECT id FROM volunteer_profiles WHERE student_id = %s", (v_id,))
                         prof_id = prof_row['id']
+                        existing_vols[v_id] = prof_id
                         volunteers_seeded += 1
-                    else:
-                        prof_id = prof['id']
 
-                    execute_query(conn, "UPDATE volunteer_profiles SET interviewed_by = %s WHERE id = %s", (interviewed_by, prof_id))
-
-                    # Map skills
                     raw_skills = row.get("skills", "")
                     for s_item in raw_skills.split(","):
                         s_clean = s_item.strip()
-                        # normalize slight variations
-                        if s_clean == "Stage & Backstage Management" or s_clean == "Stage/ Backstage Management":
+                        if s_clean in ("Stage & Backstage Management", "Stage/ Backstage Management"):
                             s_clean = "Stage & Backstage Management"
-                        elif s_clean == "Budgeting & Finance" or s_clean == "Finance & Budgeting":
+                        elif s_clean in ("Budgeting & Finance", "Finance & Budgeting"):
                             s_clean = "Budgeting & Finance"
-                        elif s_clean == "Sponsorship & Fundraising" or s_clean == "Sponsorships":
+                        elif s_clean in ("Sponsorship & Fundraising", "Sponsorships"):
                             s_clean = "Sponsorship & Fundraising"
 
                         if s_clean in skill_ids:
                             sk_id = skill_ids[s_clean]
-                            has_sk = fetch_one(conn, "SELECT 1 FROM volunteer_skills WHERE volunteer_id = %s AND skill_id = %s", (prof_id, sk_id))
-                            if not has_sk:
+                            if (prof_id, sk_id) not in existing_skills:
                                 execute_query(conn, "INSERT INTO volunteer_skills (volunteer_id, skill_id, created_at) VALUES (%s, %s, %s)", (prof_id, sk_id, ts))
+                                existing_skills.add((prof_id, sk_id))
 
-                    # Preferences
                     pref_raw = row.get("department_preference", "")
                     for rank, p_item in enumerate(pref_raw.split(","), start=1):
                         p_clean = p_item.strip()
-                        if p_clean:
-                            has_pref = fetch_one(conn, "SELECT 1 FROM volunteer_preferences WHERE volunteer_id = %s AND department_name = %s", (prof_id, p_clean))
-                            if not has_pref:
-                                execute_query(conn, """
-                                    INSERT INTO volunteer_preferences (volunteer_id, department_name, preference_rank, created_at)
-                                    VALUES (%s, %s, %s, %s)
-                                """, (prof_id, p_clean, rank, ts))
+                        if p_clean and (prof_id, p_clean) not in existing_prefs:
+                            execute_query(conn, """
+                                INSERT INTO volunteer_preferences (volunteer_id, department_name, preference_rank, created_at)
+                                VALUES (%s, %s, %s, %s)
+                            """, (prof_id, p_clean, rank, ts))
+                            existing_prefs.add((prof_id, p_clean))
+
+            print(f"  -> Processed batch {min(i + chunk_size, len(rows))}/{len(rows)} volunteers...")
 
         print(f"Volunteers processed: {volunteers_seeded} new seeded.")
-        if not seed_demo_data:
-            print("Demo volunteers and the pilot event are disabled (SEED_DEMO_DATA=false).")
 
-        # 5. Seed Pilot Event: Kala Fest
+    # 4. Seed Pilot Event: Kala Fest
+    with transaction() as conn:
         existing_event = fetch_one(conn, "SELECT id FROM events WHERE name = %s", ("Kala Fest",))
         if seed_demo_data and not existing_event:
             execute_query(conn, """
@@ -237,18 +238,15 @@ def seed_database():
             event_row = fetch_one(conn, "SELECT id FROM events WHERE name = %s", ("Kala Fest",))
             event_id = event_row['id']
 
-            # Attach volunteer availability for all seeded volunteers for Kala Fest
-            all_vols = fetch_all(conn, "SELECT id FROM volunteer_profiles")
-            for v in all_vols:
-                execute_query(conn, """
-                    INSERT INTO volunteer_availability (volunteer_id, event_id, available, availability_start, availability_end, max_hours, notes)
-                    VALUES (%s, %s, 1, '09:00', '21:00', 8.0, 'Available for Kala Fest pilot')
-                """, (v['id'], event_id))
+            # Attach volunteer availability in one query
+            execute_query(conn, """
+                INSERT INTO volunteer_availability (volunteer_id, event_id, available, availability_start, availability_end, max_hours, notes)
+                SELECT id, %s, 1, '09:00', '21:00', 8.0, 'Available for Kala Fest pilot'
+                FROM volunteer_profiles
+            """, (event_id,))
 
             # Seed Event Requirements
-            # Following specifications and realistic demands
             reqs = [
-                # Critical
                 {
                     "dept": "Stage & Backstage Management",
                     "role": "Stage Lead & Technical Stage Crew",
@@ -269,7 +267,6 @@ def seed_database():
                     "source": "fixed_headcount",
                     "duration": 8.0
                 },
-                # High
                 {
                     "dept": "IT & Technical Support",
                     "role": "Audio Visual & Networking Crew",
@@ -306,7 +303,6 @@ def seed_database():
                     "source": "fixed_headcount",
                     "duration": 8.0
                 },
-                # Normal
                 {
                     "dept": "Marketing & Promotions",
                     "role": "Media Coverage & Social Broadcast",
@@ -377,6 +373,8 @@ def seed_database():
             print(f"Kala Fest pilot event seeded with {len(reqs)} department requirements.")
         elif existing_event:
             print("Kala Fest already exists in database.")
+
+    print("Database seeding completed successfully.")
 
 if __name__ == "__main__":
     seed_database()
