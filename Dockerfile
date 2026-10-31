@@ -12,7 +12,7 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PYTHONPATH=/app \
     FLASK_ENV=production \
-    PORT=5000
+    PORT=7860
 
 RUN apt-get update \
     && apt-get install --no-install-recommends -y libpq5 \
@@ -26,9 +26,9 @@ COPY backend/ /app/backend/
 COPY ["volunteers CSV.csv", "/app/volunteers CSV.csv"]
 COPY --from=frontend-build /app/frontend/dist/ /app/frontend/dist/
 
-RUN useradd --system --create-home --uid 10001 appuser
-USER 10001:10001
+RUN useradd -m -u 1000 appuser && chown -R appuser:appuser /app
+USER appuser
 
-EXPOSE 5000
+EXPOSE 7860
 
-CMD ["sh", "-c", "python -m backend.app.db.migrate && python -m backend.app.db.seed && exec gunicorn --bind 0.0.0.0:${PORT:-5000} --workers 2 --threads 4 --timeout 120 backend.run:app"]
+CMD ["sh", "-c", "python -m backend.app.db.migrate && python -m backend.app.db.seed && exec gunicorn --bind 0.0.0.0:${PORT:-7860} --workers 2 --threads 4 --timeout 120 backend.run:app"]
