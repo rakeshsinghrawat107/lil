@@ -208,6 +208,57 @@ export function CampusLogin({ onLoginSuccess }) {
               </button>
             </form>
 
+            <div style={{ marginTop: '20px', paddingTop: '16px', borderTop: '1px dashed var(--color-border)' }}>
+              <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--color-muted)', marginBottom: '8px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                Quick Fill Demo Accounts
+              </div>
+              <div style={{ display: 'flex', gap: '8px' }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEmail('convener@tapmi.edu.in');
+                    setPassword('convener123');
+                    setLoginError('');
+                  }}
+                  style={{
+                    flex: 1,
+                    padding: '8px 10px',
+                    fontSize: '12px',
+                    borderRadius: '6px',
+                    border: '1px solid var(--color-border)',
+                    background: '#f8f9fa',
+                    color: 'var(--color-text)',
+                    cursor: 'pointer',
+                    textAlign: 'left'
+                  }}
+                >
+                  <strong>Convener</strong><br />
+                  <span style={{ fontSize: '11px', color: 'var(--color-muted)' }}>convener@tapmi.edu.in</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setEmail('coconvener@tapmi.edu.in');
+                    setPassword('coconvener123');
+                    setLoginError('');
+                  }}
+                  style={{
+                    flex: 1,
+                    padding: '8px 10px',
+                    fontSize: '12px',
+                    borderRadius: '6px',
+                    border: '1px solid var(--color-border)',
+                    background: '#f8f9fa',
+                    color: 'var(--color-text)',
+                    cursor: 'pointer',
+                    textAlign: 'left'
+                  }}
+                >
+                  <strong>Co-Convener</strong><br />
+                  <span style={{ fontSize: '11px', color: 'var(--color-muted)' }}>coconvener@tapmi.edu.in</span>
+                </button>
+              </div>
+            </div>
           </div>
         ) : (
           <div>

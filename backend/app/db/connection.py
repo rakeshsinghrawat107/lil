@@ -50,15 +50,29 @@ def get_connection():
             return DatabaseWrapper(conn, is_pg=True)
         elif _PG_DRIVER == "pg8000":
             import pg8000.dbapi
-            # Parse database url: postgresql://user:password@host:port/dbname
-            pattern = re.compile(r"postgres(?:ql)?://([^:]+):([^@]+)@([^:/]+)(?::(\d+))?/(.+)")
-            m = pattern.match(Config.DATABASE_URL)
-            if m:
-                user, password, host, port, dbname = m.groups()
-                port = int(port) if port else 5432
-                conn = pg8000.dbapi.connect(user=user, password=password, host=host, port=port, database=dbname)
-                return DatabaseWrapper(conn, is_pg=True)
-            raise RuntimeError(f"Unable to parse PostgreSQL URL: {Config.DATABASE_URL}")
+            import ssl
+            from urllib.parse import urlparse, unquote
+            parsed = urlparse(Config.DATABASE_URL)
+            if not parsed.hostname:
+                raise RuntimeError(f"Unable to parse PostgreSQL URL: {Config.DATABASE_URL}")
+            user = unquote(parsed.username) if parsed.username else None
+            password = unquote(parsed.password) if parsed.password else None
+            host = parsed.hostname
+            port = parsed.port or 5432
+            dbname = parsed.path.lstrip("/").split("?")[0] if parsed.path else "postgres"
+            # Support SSL for cloud providers like Supabase / Neon / AWS RDS
+            ssl_ctx = None
+            if "sslmode=disable" not in Config.DATABASE_URL.lower():
+                ssl_ctx = ssl.create_default_context()
+            conn = pg8000.dbapi.connect(
+                user=user,
+                password=password,
+                host=host,
+                port=port,
+                database=dbname,
+                ssl_context=ssl_ctx
+            )
+            return DatabaseWrapper(conn, is_pg=True)
         else:
             raise RuntimeError("PostgreSQL URL requested but neither psycopg nor pg8000 could be loaded.")
     else:
