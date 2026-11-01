@@ -1,8 +1,17 @@
-<<<<<<< HEAD
+---
+title: TAPMI Cultural Committee Allocation System
+emoji: 🎭
+colorFrom: orange
+colorTo: red
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # Cultural Committee Volunteer Management and Event Resource Allocation System
 **Pilot Event:** Kala Fest  
 **Institution:** T. A. Pai Management Institute (TAPMI), Manipal  
-**Architecture:** Python + Flask + PuLP ILP Optimizer + PostgreSQL/SQLite + React + Vite  
+**Architecture:** Python + Flask + PuLP ILP Optimizer + Supabase PostgreSQL + React + Vite  
 **Visual System:** Minimal White & Warm Orange (`#E8752E`)
 
 ---
@@ -29,12 +38,11 @@ This web-based decision-support system manages cultural committee volunteers and
 
 ## 2. Technology Stack
 
-- **Backend:** Python 3.10+ / 3.13, Flask 3.1+, Flask-CORS, Werkzeug
+- **Backend:** Python 3.10+ / 3.12, Flask 3.1+, Flask-CORS, Werkzeug, Gunicorn
 - **Optimization:** PuLP 2.9.0 (CBC solver for binary integer programming)
-- **Data & Numerical Processing:** NumPy, Pandas-compatible tabular processing
-- **Visualization:** Matplotlib (rendered on backend without browser overhead)
-- **Database:** PostgreSQL (with `psycopg` and pure-python `pg8000` driver support) and zero-config local standalone SQLite database support
-- **Roster exports:** CSV and multi-sheet Excel files for the current published allocation
+- **Data & Numerical Processing:** NumPy, python-dateutil
+- **Database:** Supabase PostgreSQL 17 (via pure-Python `pg8000` driver with SSL) and local standalone SQLite fallback
+- **Roster exports:** CSV and multi-sheet Excel files for published allocations
 - **Frontend:** React 18, Vite 5, Lucide Line Icons, Custom White & Warm Orange Design System
 
 ---
@@ -44,23 +52,15 @@ This web-based decision-support system manages cultural committee volunteers and
 ### Prerequisites
 - Python 3.10 or higher
 - Node.js 18+ and npm
-- PostgreSQL (optional for local development; system includes automatic zero-config standalone fallback)
+- Supabase PostgreSQL (or local SQLite)
 
-### Step 1: Clone & Configure Environment Variables
-Copy the example environment configuration:
-```bash
-cp .env.example .env
-```
-Default `.env` settings:
+### Step 1: Configure Environment Variables
+Copy `.env.example` to `.env` and fill in your Supabase connection URL:
 ```ini
-FLASK_ENV=development
+DATABASE_URL=postgresql://postgres.ssmzoukesrdsgdvglhyx:Kingpin0707seryvhabw@aws-0-eu-north-1.pooler.supabase.com:6543/postgres?sslmode=require
+SECRET_KEY=96fe1f4dfbbf15dcf02fede4cd3c361004c0f05a09c2486d
 PORT=5000
-SECRET_KEY=tapmi-cultural-committee-dev-secret-key-2026
-DATABASE_URL=sqlite:///backend/cultural_committee.db
-OTP_DELIVERY_MODE=development
-PILOT_EVENT_NAME=Kala Fest
 ```
-*(To use PostgreSQL, set `DATABASE_URL=postgresql://user:password@localhost:5432/cultural_committee`)*
 
 ---
 
@@ -68,77 +68,32 @@ PILOT_EVENT_NAME=Kala Fest
 ```bash
 pip install -r backend/requirements.txt
 ```
-*(Dependencies include: `flask`, `flask-cors`, `gunicorn`, `openpyxl`, `pulp==2.9.0`, `numpy`, `pg8000`, `pytest`, `werkzeug`, `matplotlib`)*
 
 ---
 
 ### Step 3: Run Database Migrations & Seed Pilot Data
-Apply the versioned SQL schema migrations (`001_initial_schema.sql`):
+Verify Supabase and automatically apply migrations:
 ```bash
-python -m backend.app.db.migrate
-```
-Seed the standardized department catalog, skills taxonomy, volunteer data from `volunteers CSV.csv`, and Kala Fest event requirements:
-```bash
-python -m backend.app.db.seed
+python backend/test_supabase_connection.py
 ```
 
 ---
 
 ### Step 4: Install Frontend Dependencies & Build
-In PowerShell/Bash:
 ```bash
 cd frontend
-npm install
-npm run build
+npm.cmd install
+npm.cmd run build
 cd ..
 ```
 
 ---
 
 ### Step 5: Start the Full-Stack Application
-
-#### Option A: Unified Full-Stack Server (Recommended)
-Because the Flask application serves both the API and the compiled React production frontend directly:
 ```bash
 python backend/run.py
 ```
 Open **[http://localhost:5000](http://localhost:5000)** in your browser.
-
-### Production-style Docker Compose deployment
-
-The Compose stack builds the React frontend into the Flask image and runs Flask with Gunicorn beside PostgreSQL. PostgreSQL data persists in a named volume. The app waits for the database health check, applies migrations at startup, and then starts the web server.
-
-Create a private environment file and replace all placeholders before starting:
-
-```powershell
-Copy-Item .env.compose.example .env
-```
-
-Use unique secrets. `POSTGRES_PASSWORD` should be URL-safe because it is included in `DATABASE_URL`. Keep `SEED_DEMO_DATA=false` in production. Set both `BOOTSTRAP_CONVENER_EMAIL` and `BOOTSTRAP_CONVENER_PASSWORD` to provision the first organizer account. The catalog is seeded, while predictable demo logins, volunteers, and Kala Fest sample records remain disabled. Set `SEED_DEMO_DATA=true` only for an isolated demo environment; it creates the known test accounts and sample records.
-
-Generate secret values with `python -c "import secrets; print(secrets.token_hex(32))"` (run it once for each secret). Use that value for `POSTGRES_PASSWORD` and a separate random value for `SECRET_KEY`. Set a unique organizer password with at least 12 characters.
-
-Start the services:
-
-```powershell
-docker compose up --build -d
-```
-
-Open **[http://localhost:5000](http://localhost:5000)**. Follow service logs with `docker compose logs -f app`, and stop the stack with `docker compose down`. `docker compose down -v` also deletes the persistent database volume.
-
-The Compose stack provides a production-style single-host deployment. Before exposing it to committee users, configure HTTPS at a reverse proxy, back up PostgreSQL, provision unique credentials, and connect an approved email provider. The current OTP flow writes activation codes to the app log and is intended for development/demo use.
-
-#### Option B: Standalone Vite Dev Server
-Run the Flask API backend in one terminal:
-```bash
-python backend/run.py
-```
-In a second terminal, start the Vite dev server:
-```bash
-cd frontend
-npm run dev
-```
-Open **[http://localhost:5173](http://localhost:5173)** in your browser (API calls are automatically proxied to port 5000).
 
 ---
 
@@ -148,22 +103,7 @@ Run the complete test suite with pytest:
 ```bash
 python -m pytest backend/tests
 ```
-15 test suites verify:
-1. `test_capacity_calculation`: Unit formula `ceil(Workload × Service Time ÷ Peak Window)`.
-2. `test_eligibility_hard_rules`: Inactive volunteers, missing mandatory skills, duplicate event assignment blocked.
-3. `test_worked_example_five_positions_four_volunteers`: 5 positions, 4 volunteers $\rightarrow$ exactly 4 assignments, 1 vacancy, 0 duplicates.
-4. `test_compare_algorithms`: Identical snapshot comparison between Greedy and ILP.
-5. `test_simulator_does_not_mutate_baseline`: Verifies deep copy isolation.
-6. `test_health_endpoint`: Checks database connection and pilot event configuration.
-7. `test_auth_login_convener_and_co_convener`: Equal permissions for Convener and Co-convener.
-8. `test_unauthenticated_protected_route_fails`: 401 Unauthorized verification.
-9. `test_volunteer_forbidden_from_organizer_endpoints`: 403 Forbidden role boundary enforcement.
-10. `test_duplicate_student_id_and_email_rejected`: 409 Conflict integrity protection.
-11. `test_volunteer_activation_otp_workflow`: OTP challenge, attempt limiting, verification, password creation, and volunteer login.
-12. `test_full_allocation_lifecycle_and_publication`: Run $\rightarrow$ Draft $\rightarrow$ Approval $\rightarrow$ Publication $\rightarrow$ Volunteer sees only their published assignment.
-13. `test_manual_edit_skill_override_requires_reason`: Skill mismatch warning, required non-empty reason, and audit trail.
-14. `test_archived_event_modifications_blocked`: 409 Conflict when editing archived events.
-15. `test_simulation_does_not_mutate_live_data`: Live database records unchanged after running scenarios.
+All 17 tests verify capacity calculation, eligibility hard rules, algorithm comparisons, authentication, lifecycle workflows, and simulation deep-copy isolation.
 
 ---
 
@@ -178,20 +118,3 @@ The database comes pre-seeded with test accounts:
 | **Volunteer (Aarohi Anchal)** | `aarohi.anchal@tapmi.edu.in` | `volunteer123` | Published assignments, skills catalog |
 
 *(Quick prefill buttons are provided on the login page for instantaneous demo access)*
-
----
-
-## 6. Troubleshooting
-
-- **PowerShell Execution Policy Error on npm:**  
-  On Windows systems where script execution is restricted, run `npm.cmd` instead of `npm`, e.g.:
-  ```powershell
-  npm.cmd install
-  npm.cmd run build
-  ```
-- **Windows Application Control (AppLocker) DLL Blocking:**  
-  The system uses pure-Python `pg8000` for PostgreSQL connectivity and pure-Python `pulp 2.9.0` with CBC solver, avoiding unsigned C/Rust DLL blocks in Windows user AppData directories.
-=======
-# TAPMI
-event management platform
->>>>>>> 7b9501e0c3b986604f2f79c127bd63a1e7ed3627
