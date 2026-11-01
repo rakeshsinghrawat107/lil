@@ -6,7 +6,7 @@ from pathlib import Path
 from backend.app.config import Config
 
 def is_postgres():
-    url = os.environ.get("DATABASE_URL") or Config.DATABASE_URL
+    url = getattr(Config, "DATABASE_URL", "")
     return url.startswith("postgres://") or url.startswith("postgresql://")
 
 def _get_pg_driver():
@@ -47,7 +47,7 @@ class DatabaseWrapper:
 
 def get_connection():
     if is_postgres():
-        db_url = os.environ.get("DATABASE_URL") or Config.DATABASE_URL
+        db_url = Config.DATABASE_URL
         driver = _get_pg_driver()
         if driver == "psycopg":
             import psycopg
@@ -69,8 +69,6 @@ def get_connection():
             ssl_ctx = None
             if "sslmode=disable" not in db_url.lower():
                 ssl_ctx = ssl.create_default_context()
-                # On Windows, Supabase pooler certificate chain requires disabling hostname check
-                # unless a custom root CA is installed, matching standard libpq sslmode=require behavior
                 if "sslmode=verify-full" not in db_url.lower():
                     ssl_ctx.check_hostname = False
                     ssl_ctx.verify_mode = ssl.CERT_NONE
@@ -87,7 +85,7 @@ def get_connection():
             raise RuntimeError("PostgreSQL URL requested but neither psycopg nor pg8000 could be loaded.")
     else:
         # SQLite
-        db_url = os.environ.get("DATABASE_URL") or Config.DATABASE_URL
+        db_url = Config.DATABASE_URL
         path_str = db_url.replace("sqlite:///", "")
         path = Path(path_str)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -138,7 +136,6 @@ def fetch_one(conn, sql: str, params=()):
     if hasattr(row, "keys"):
         return dict(row)
     elif conn.is_pg:
-        # For pg8000 / postgres tuple cursor
         cols = [desc[0] for desc in cur.description]
         return dict(zip(cols, row))
     return dict(row)
@@ -171,8 +168,6 @@ def run_migrations():
                         CHECK (role IN ('convener', 'co_convener', 'volunteer', 'core_committee'))
                     """)
 
-                # Translate the SQLite identity/flag types used by the shared schema.
-                # Integer flags preserve the application's existing 0/1 predicates.
                 pg_sql = sql.replace("INTEGER PRIMARY KEY AUTOINCREMENT", "SERIAL PRIMARY KEY")
                 pg_sql = pg_sql.replace("BOOLEAN", "INTEGER")
                 for statement in pg_sql.split(";"):
@@ -199,7 +194,6 @@ def run_migrations():
             conn.cursor().execute("ALTER TABLE volunteer_profiles ADD COLUMN interviewed_by TEXT")
 
 def _upgrade_sqlite_user_roles(conn):
-    """Rebuild legacy SQLite users tables to allow the core_committee role."""
     schema = fetch_one(conn, "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'users'")
     if not schema or "core_committee" in (schema["sql"] or "").lower():
         return
@@ -227,7 +221,6 @@ def _upgrade_sqlite_user_roles(conn):
             SELECT id, email, password_hash, role, status, created_at, updated_at, last_login_at
             FROM users_legacy
         """)
-        raw_conn.drop_table_legacy = "DROP TABLE users_legacy"
         raw_conn.execute("DROP TABLE users_legacy")
         raw_conn.commit()
     except Exception:
